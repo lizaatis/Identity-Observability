@@ -1,0 +1,22 @@
+# Local env (secrets)
+.env
+
+# OS / editor
+.DS_Store
+.idea
+*.swp
+*.swo
+*~
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build / binaries
+dist/
+*.exe
+
+# Logs / temp
+*.log
+tmp/
+temp/

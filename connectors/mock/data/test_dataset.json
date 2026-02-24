@@ -1,0 +1,96 @@
+{
+  "users": [
+    {
+      "source_system": "okta_mock",
+      "source_id": "usr_okta_1",
+      "email": "alice@example.com",
+      "display_name": "Alice Smith",
+      "employee_id": "E001",
+      "status": "active"
+    },
+    {
+      "source_system": "entra_mock",
+      "source_id": "usr_entra_1",
+      "email": "alice@example.com",
+      "display_name": "Alice Smith",
+      "employee_id": "E001",
+      "status": "active"
+    },
+    {
+      "source_system": "okta_mock",
+      "source_id": "usr_okta_2",
+      "email": "bob@example.com",
+      "display_name": "Bob Jones",
+      "employee_id": "E002",
+      "status": "active"
+    },
+    {
+      "source_system": "entra_mock",
+      "source_id": "usr_entra_2",
+      "email": "bob@example.com",
+      "display_name": "Bob Jones",
+      "employee_id": "E002",
+      "status": "disabled"
+    },
+    {
+      "source_system": "aws_mock",
+      "source_id": "usr_aws_1",
+      "email": "alice@example.com",
+      "display_name": "Alice Smith",
+      "employee_id": "E001",
+      "status": "active"
+    },
+    {
+      "source_system": "okta_mock",
+      "source_id": "usr_okta_3",
+      "email": "carol@example.com",
+      "display_name": "Carol Lee",
+      "employee_id": "E003",
+      "status": "active"
+    }
+  ],
+  "groups": [
+    { "source_system": "okta_mock", "source_id": "grp_okta_1", "name": "Finance" },
+    { "source_system": "okta_mock", "source_id": "grp_okta_2", "name": "Engineering" },
+    { "source_system": "entra_mock", "source_id": "grp_entra_1", "name": "Azure-Admins" },
+    { "source_system": "aws_mock", "source_id": "grp_aws_1", "name": "AWS-PowerUsers" }
+  ],
+  "roles": [
+    { "source_system": "okta_mock", "source_id": "role_okta_1", "name": "App-Admin", "privilege_level": "admin" },
+    { "source_system": "okta_mock", "source_id": "role_okta_2", "name": "Read-Only", "privilege_level": "read" },
+    { "source_system": "entra_mock", "source_id": "role_entra_1", "name": "Global Admin", "privilege_level": "admin" },
+    { "source_system": "aws_mock", "source_id": "role_aws_1", "name": "AdministratorAccess", "privilege_level": "admin" }
+  ],
+  "permissions": [
+    { "source_system": "okta_mock", "source_id": "perm_okta_1", "name": "okta.apps.manage", "resource_type": "app" },
+    { "source_system": "okta_mock", "source_id": "perm_okta_2", "name": "okta.users.read", "resource_type": "user" },
+    { "source_system": "entra_mock", "source_id": "perm_entra_1", "name": "entra.users.write", "resource_type": "directory" },
+    { "source_system": "aws_mock", "source_id": "perm_aws_1", "name": "iam:*", "resource_type": "iam" }
+  ],
+  "identity_group": [
+    { "source_system": "okta_mock", "source_user_id": "usr_okta_1", "source_group_id": "grp_okta_1" },
+    { "source_system": "okta_mock", "source_user_id": "usr_okta_2", "source_group_id": "grp_okta_2" },
+    { "source_system": "entra_mock", "source_user_id": "usr_entra_1", "source_group_id": "grp_entra_1" },
+    { "source_system": "aws_mock", "source_user_id": "usr_aws_1", "source_group_id": "grp_aws_1" }
+  ],
+  "identity_role": [
+    { "source_system": "okta_mock", "source_user_id": "usr_okta_1", "source_role_id": "role_okta_1" },
+    { "source_system": "entra_mock", "source_user_id": "usr_entra_1", "source_role_id": "role_entra_1" },
+    { "source_system": "aws_mock", "source_user_id": "usr_aws_1", "source_role_id": "role_aws_1" },
+    { "source_system": "okta_mock", "source_user_id": "usr_okta_2", "source_role_id": "role_okta_2" },
+    { "source_system": "okta_mock", "source_user_id": "usr_okta_3", "source_role_id": "role_okta_2" }
+  ],
+  "group_role": [
+    { "source_system": "okta_mock", "source_group_id": "grp_okta_1", "source_role_id": "role_okta_1" },
+    { "source_system": "okta_mock", "source_group_id": "grp_okta_2", "source_role_id": "role_okta_2" },
+    { "source_system": "entra_mock", "source_group_id": "grp_entra_1", "source_role_id": "role_entra_1" },
+    { "source_system": "aws_mock", "source_group_id": "grp_aws_1", "source_role_id": "role_aws_1" }
+  ],
+  "role_permission": [
+    { "source_system": "okta_mock", "source_role_id": "role_okta_1", "source_permission_id": "perm_okta_1" },
+    { "source_system": "okta_mock", "source_role_id": "role_okta_1", "source_permission_id": "perm_okta_2" },
+    { "source_system": "okta_mock", "source_role_id": "role_okta_2", "source_permission_id": "perm_okta_2" },
+    { "source_system": "entra_mock", "source_role_id": "role_entra_1", "source_permission_id": "perm_entra_1" },
+    { "source_system": "aws_mock", "source_role_id": "role_aws_1", "source_permission_id": "perm_aws_1" }
+  ]
+}
