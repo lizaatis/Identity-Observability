@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -16,6 +18,33 @@ type IdentityResponse struct {
 	Sources              []IdentitySourceDTO     `json:"sources"`
 	EffectivePermissions []EffectivePermissionDTO `json:"effective_permissions"`
 	Lineage              []PermissionLineageDTO  `json:"lineage"`
+	SystemSummary        []SystemSummaryItem     `json:"system_summary"`
+	DeadendSummary       DeadendSummary          `json:"deadend_summary"`
+	StitchingSummary     StitchingSummary        `json:"stitching_summary"`
+}
+
+// SystemSummaryItem is one line in the identity dossier strip (e.g. "Okta: Super Admin (MFA: Yes)")
+type SystemSummaryItem struct {
+	System         string   `json:"system"`
+	IsAdmin        bool     `json:"is_admin"`
+	AdminRoles     []string `json:"admin_roles"`
+	MfaEnabled     *bool    `json:"mfa_enabled,omitempty"`
+	LastSyncAt     string   `json:"last_sync_at"`
+	DataFreshness  string   `json:"data_freshness"` // fresh, stale, very_stale, unknown
+}
+
+// StitchingSummary explains why this identity is treated as one person across systems.
+type StitchingSummary struct {
+	Confidence  string   `json:"confidence"` // high, medium, low, single_source
+	Reasons     []string `json:"reasons"`
+	NeedsReview bool     `json:"needs_review"`
+	SourceCount int      `json:"source_count"`
+}
+
+// DeadendSummary for the dossier strip (e.g. "Deadends: 1 (orphaned user)")
+type DeadendSummary struct {
+	Count   int      `json:"count"`
+	Reasons []string `json:"reasons"`
 }
 
 type IdentityDTO struct {
@@ -29,10 +58,12 @@ type IdentityDTO struct {
 }
 
 type IdentitySourceDTO struct {
-	SourceSystem string `json:"source_system"`
-	SourceUserID string `json:"source_user_id"`
-	SourceStatus string `json:"source_status"`
-	SyncedAt     string `json:"synced_at"`
+	SourceSystem    string  `json:"source_system"`
+	SourceUserID    string  `json:"source_user_id"`
+	SourceStatus    string  `json:"source_status"`
+	SyncedAt        string  `json:"synced_at"`
+	MfaEnabled      *string `json:"mfa_enabled,omitempty"` // "true"/"false" from metadata
+	DataFreshness   string  `json:"data_freshness"`         // fresh, stale, very_stale, unknown
 }
 
 type EffectivePermissionDTO struct {
@@ -87,22 +118,30 @@ func identityByID(pool *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 
-		// 2. Identity sources
+		// 2. Identity sources (include MFA from metadata if column exists)
 		rows, err := pool.Query(ctx, `
-			SELECT source_system, source_user_id, source_status, synced_at::text
+			SELECT source_system, source_user_id, source_status, synced_at::text,
+			       COALESCE(metadata->>'mfa_enabled', metadata->>'MFA_ENABLED') AS mfa_enabled
 			FROM identity_sources WHERE identity_id = $1`, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			// Fallback when metadata column does not exist (run migration 008)
+			rows, err = pool.Query(ctx, `
+				SELECT source_system, source_user_id, source_status, synced_at::text, NULL::text
+				FROM identity_sources WHERE identity_id = $1`, id)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		var sources []IdentitySourceDTO
 		for rows.Next() {
 			var s IdentitySourceDTO
-			if err := rows.Scan(&s.SourceSystem, &s.SourceUserID, &s.SourceStatus, &s.SyncedAt); err != nil {
+			if err := rows.Scan(&s.SourceSystem, &s.SourceUserID, &s.SourceStatus, &s.SyncedAt, &s.MfaEnabled); err != nil {
 				rows.Close()
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			s.DataFreshness = dataFreshnessFromSyncedAt(s.SyncedAt)
 			sources = append(sources, s)
 		}
 		rows.Close()
@@ -176,11 +215,130 @@ func identityByID(pool *pgxpool.Pool) gin.HandlerFunc {
 			})
 		}
 
+		// 5. Admin roles per system (from effective permissions: privilege_level=admin or role name contains admin/super/owner)
+		adminRolesBySystem := make(map[string]map[string]struct{})
+		for _, p := range perms {
+			sys := p.RoleSourceSystem
+			if sys == "" {
+				continue
+			}
+			lower := strings.ToLower(p.RoleName)
+			isPriv := p.PrivilegeLevel == "admin" || strings.Contains(lower, "admin") ||
+				strings.Contains(lower, "super") || strings.Contains(lower, "owner")
+			if !isPriv {
+				continue
+			}
+			if adminRolesBySystem[sys] == nil {
+				adminRolesBySystem[sys] = make(map[string]struct{})
+			}
+			adminRolesBySystem[sys][p.RoleName] = struct{}{}
+		}
+
+		// 6. System summary for dossier strip
+		systemSummary := make([]SystemSummaryItem, 0, len(sources))
+		for _, s := range sources {
+			roles := make([]string, 0)
+			if m := adminRolesBySystem[s.SourceSystem]; m != nil {
+				for r := range m {
+					roles = append(roles, r)
+				}
+			}
+			var mfa *bool
+			if s.MfaEnabled != nil {
+				b := strings.ToLower(*s.MfaEnabled) == "true" || *s.MfaEnabled == "1"
+				mfa = &b
+			}
+			systemSummary = append(systemSummary, SystemSummaryItem{
+				System:        s.SourceSystem,
+				IsAdmin:       len(roles) > 0,
+				AdminRoles:    roles,
+				MfaEnabled:    mfa,
+				LastSyncAt:    s.SyncedAt,
+				DataFreshness: dataFreshnessFromSyncedAt(s.SyncedAt),
+			})
+		}
+
+		stitch := buildStitchingSummary(ident, sources)
+		var needsReview bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM stitching_review_queue
+				WHERE identity_id = $1 AND status = 'pending'
+			)`, id).Scan(&needsReview); err == nil {
+			stitch.NeedsReview = needsReview
+		}
+
+		// 7. Deadend summary (risk_flags where is_deadend, not cleared)
+		var deadendSummary DeadendSummary
+		deadRows, err := pool.Query(ctx, `
+			SELECT rule_key, message FROM risk_flags
+			WHERE identity_id = $1 AND is_deadend = true AND (cleared_at IS NULL OR cleared_at > NOW())`, id)
+		if err == nil {
+			for deadRows.Next() {
+				var ruleKey, msg string
+				if err := deadRows.Scan(&ruleKey, &msg); err != nil {
+					break
+				}
+				deadendSummary.Count++
+				if msg != "" {
+					deadendSummary.Reasons = append(deadendSummary.Reasons, msg)
+				} else {
+					deadendSummary.Reasons = append(deadendSummary.Reasons, ruleKey)
+				}
+			}
+			deadRows.Close()
+		}
+
 		c.JSON(http.StatusOK, IdentityResponse{
 			Identity:             ident,
 			Sources:              sources,
 			EffectivePermissions: perms,
 			Lineage:              lineage,
+			SystemSummary:        systemSummary,
+			DeadendSummary:       deadendSummary,
+			StitchingSummary:     stitch,
 		})
 	}
+}
+
+func dataFreshnessFromSyncedAt(syncedAt string) string {
+	if syncedAt == "" {
+		return "unknown"
+	}
+	t, err := time.Parse(time.RFC3339, syncedAt)
+	if err != nil {
+		return "unknown"
+	}
+	age := time.Since(t)
+	if age < 24*time.Hour {
+		return "fresh"
+	}
+	if age < 7*24*time.Hour {
+		return "stale"
+	}
+	return "very_stale"
+}
+
+func buildStitchingSummary(ident IdentityDTO, sources []IdentitySourceDTO) StitchingSummary {
+	s := StitchingSummary{
+		SourceCount: len(sources),
+		Reasons:     []string{},
+	}
+	if len(sources) <= 1 {
+		s.Confidence = "single_source"
+		s.Reasons = append(s.Reasons, "Only one linked source record in this environment — add more connectors to see cross-system stitching.")
+		return s
+	}
+	s.Reasons = append(s.Reasons, "Multiple source systems resolve to this single canonical identity row (same person in Postgres).")
+	if ident.EmployeeID != nil && strings.TrimSpace(*ident.EmployeeID) != "" {
+		s.Confidence = "high"
+		s.Reasons = append(s.Reasons, "Employee ID is present on the canonical record — strong key when connectors provide it.")
+	} else {
+		s.Confidence = "medium"
+		s.Reasons = append(s.Reasons, "Typical correlation uses email and per-connector IDs stored in identity_sources.")
+	}
+	if ident.Email != "" {
+		s.Reasons = append(s.Reasons, "Canonical email: "+ident.Email+" — used as the primary human-readable join key.")
+	}
+	return s
 }

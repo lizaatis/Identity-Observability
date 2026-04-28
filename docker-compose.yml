@@ -3,7 +3,8 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Using TimescaleDB for time-series event storage
+    image: timescale/timescaledb:latest-pg16
     container_name: identity-observability-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-observability}
@@ -32,6 +33,27 @@ services:
       timeout: 3s
       retries: 5
 
+  neo4j:
+    image: neo4j:5-community
+    container_name: identity-observability-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/observability_dev}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    ports:
+      - "${NEO4J_PORT:-7474}:7474"  # HTTP
+      - "${NEO4J_BOLT_PORT:-7687}:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "observability_dev", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   redis_data:
+  neo4j_data:
+  neo4j_logs:

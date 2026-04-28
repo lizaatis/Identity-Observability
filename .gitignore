@@ -15,8 +15,16 @@ vendor/
 # Build / binaries
 dist/
 *.exe
+backend/backend
 
 # Logs / temp
 *.log
 tmp/
 temp/
+
+# Go build cache
+.go-cache/
+
+# Go test / coverage artifacts
+*.out
+coverage/

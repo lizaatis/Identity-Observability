@@ -1,0 +1,81 @@
+# Privilege Markers Configuration
+# Defines what counts as admin, elevated, and toxic access per system
+# Used by risk engine to identify privileged identities and toxic combinations
+
+privileged_markers:
+  aws:
+    admin:
+      - "AdministratorAccess"
+      - "arn:aws:iam::aws:policy/AdministratorAccess"
+      - "arn:aws:iam::aws:policy/job-function/Administrator"
+    elevated:
+      - "PowerUserAccess"
+      - "arn:aws:iam::aws:policy/PowerUserAccess"
+      - "arn:aws:iam::aws:policy/job-function/PowerUser"
+      - "arn:aws:iam::aws:policy/job-function/NetworkAdministrator"
+      - "arn:aws:iam::aws:policy/job-function/DatabaseAdministrator"
+      - "arn:aws:iam::aws:policy/job-function/SecurityAudit"
+    toxic:
+      - "AdministratorAccess" # with no MFA
+      - "PowerUserAccess" # with no MFA
+      
+  gcp:
+    admin:
+      - "roles/owner"
+      - "roles/iam.securityAdmin"
+      - "roles/iam.organizationRoleAdmin"
+      - "roles/resourcemanager.organizationAdmin"
+    elevated:
+      - "roles/editor"
+      - "roles/compute.admin"
+      - "roles/storage.admin"
+      - "roles/iam.serviceAccountAdmin"
+      - "roles/iam.roleAdmin"
+      - "roles/cloudsql.admin"
+    toxic:
+      - "roles/owner" # with no MFA
+      - "roles/iam.securityAdmin" # with no MFA
+      - "roles/resourcemanager.organizationAdmin" # with no MFA
+      
+  okta:
+    admin:
+      - "SUPER_ADMIN"
+      - "ORG_ADMIN"
+      - "API_ACCESS_MANAGEMENT_ADMIN"
+    elevated:
+      - "GROUP_ADMIN"
+      - "APP_ADMIN"
+      - "USER_ADMIN"
+      - "READ_ONLY_ADMIN"
+      - "HELP_DESK_ADMIN"
+    toxic:
+      - "SUPER_ADMIN" # with no MFA
+      - "ORG_ADMIN" # with no MFA
+      
+  sailpoint:
+    admin:
+      - "Administrator"
+      - "System Administrator"
+      - "Identity Administrator"
+    elevated:
+      - "Power User"
+      - "Security Administrator"
+      - "Access Administrator"
+      - "Certification Administrator"
+    toxic:
+      - "Administrator" # with no MFA
+      - "System Administrator" # with no MFA
+      
+  azure:
+    admin:
+      - "Global Administrator"
+      - "Privileged Role Administrator"
+      - "Security Administrator"
+    elevated:
+      - "User Administrator"
+      - "Application Administrator"
+      - "Cloud Application Administrator"
+      - "Exchange Administrator"
+    toxic:
+      - "Global Administrator" # with no MFA
+      - "Privileged Role Administrator" # with no MFA

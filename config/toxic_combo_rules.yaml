@@ -1,0 +1,60 @@
+- name: "AWS Admin with no MFA"
+  query: |
+    MATCH (u:User)-[:MEMBER_OF|HAS_ROLE*1..3]->(r:Role)
+    WHERE r.admin = true 
+      AND r.source_system CONTAINS 'aws'
+      AND (u.mfa_enabled IS NULL OR u.mfa_enabled = false)
+    RETURN u.id as identity_id, u.email, u.display_name, r.name as role_name, r.source_system
+  severity: high
+  enabled: true
+
+- name: "Cross-System Admin"
+  query: |
+    MATCH (u:User)-[:HAS_ROLE|MEMBER_OF*1..3]->(r:Role)
+    WHERE r.admin = true
+    WITH u, COLLECT(DISTINCT r.source_system) as systems
+    WHERE SIZE(systems) >= 2
+    RETURN u.id as identity_id, u.email, u.display_name, systems
+  severity: high
+  enabled: true
+
+- name: "Orphaned Group with Admin Role"
+  query: |
+    MATCH (g:Group)-[:HAS_ROLE]->(r:Role {admin: true})
+    WHERE NOT (g)<-[:MEMBER_OF]-()
+    RETURN g.id as group_id, g.name, r.name as role_name
+  severity: medium
+  enabled: true
+
+- name: "Privileged Role without MFA"
+  query: |
+    MATCH (u:User)-[:HAS_ROLE|MEMBER_OF*1..3]->(r:Role)
+    WHERE r.privilege_level IN ['admin', 'write']
+      AND (u.mfa_enabled IS NULL OR u.mfa_enabled = false)
+    RETURN u.id as identity_id, u.email, r.name as role_name, r.privilege_level
+  severity: high
+  enabled: true
+
+- name: "Admin path to sensitive-looking resource"
+  query: |
+    MATCH (u:User)-[:HAS_ROLE|MEMBER_OF*1..4]->(r:Role)
+    WHERE r.admin = true OR r.privilege_level IN ['admin', 'write']
+    MATCH (r)-[:PERMITS*1..2]->(p:Permission)-[:ON_RESOURCE]->(res:Resource)
+    WHERE toLower(res.name) CONTAINS 'prod'
+       OR toLower(res.name) CONTAINS 'customer'
+       OR toLower(coalesce(res.resource_type,'')) CONTAINS 'secret'
+       OR toLower(coalesce(res.resource_type,'')) CONTAINS 'database'
+    RETURN DISTINCT u.id as identity_id, u.email, r.name as role_name, res.name as resource_name, res.resource_type
+  severity: high
+  enabled: true
+
+- name: "No MFA plus admin role plus path to sensitive resource"
+  query: |
+    MATCH (u:User)-[:HAS_ROLE|MEMBER_OF*1..4]->(r:Role)
+    WHERE r.admin = true
+      AND (u.mfa_enabled IS NULL OR u.mfa_enabled = false)
+    MATCH (r)-[:PERMITS*1..2]->(p:Permission)-[:ON_RESOURCE]->(res:Resource)
+    WHERE toLower(res.name) CONTAINS 'prod' OR toLower(coalesce(res.resource_type,'')) CONTAINS 'database'
+    RETURN DISTINCT u.id as identity_id, u.email, r.name as role_name, res.name as resource_name
+  severity: critical
+  enabled: true

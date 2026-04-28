@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -90,6 +89,21 @@ func main() {
 	}
 	log.Println("identities and identity_sources upserted")
 
+	// 1b. Seed MFA metadata on identity_sources (so dashboard MFA coverage shows something)
+	_, err = pool.Exec(ctx, `
+		UPDATE identity_sources SET metadata = jsonb_build_object('mfa_enabled', 'true', 'mfa_configured', 'true')
+		WHERE (source_system = 'okta_mock' AND source_user_id IN ('usr_okta_1','usr_okta_2','usr_okta_3','usr_okta_4','usr_okta_5'))
+		   OR (source_system = 'entra_mock' AND source_user_id IN ('usr_entra_1','usr_entra_3','usr_entra_4','usr_entra_5','usr_entra_6'))
+		   OR (source_system = 'aws_mock' AND source_user_id IN ('usr_aws_1','usr_aws_2','usr_aws_3'))`)
+	if err != nil {
+		log.Printf("warning: MFA metadata update skipped (ensure migration 008_identity_sources_metadata.sql is applied): %v", err)
+	} else {
+		_, _ = pool.Exec(ctx, `
+			UPDATE identity_sources SET metadata = jsonb_build_object('mfa_enabled', 'false', 'mfa_configured', 'false')
+			WHERE source_system = 'okta_mock' AND source_user_id IN ('usr_okta_6','usr_okta_7','usr_okta_8','usr_okta_9','usr_okta_10')`)
+		log.Println("MFA metadata seeded on identity_sources")
+	}
+
 	// 2. Upsert groups, roles, permissions and build source -> id maps
 	groupID := make(map[string]int64)   // key: source_system|source_id
 	roleID := make(map[string]int64)
@@ -139,9 +153,16 @@ func main() {
 	// Resolve identity_id from (source_system, source_user_id)
 	getIdentityID := func(system, userID string) int64 {
 		var id int64
-		err := pool.QueryRow(ctx, `SELECT identity_id FROM identity_sources WHERE source_system = $1 AND source_user_id = $2`, system, userID).Scan(&id)
+		err := pool.QueryRow(ctx, `
+			SELECT identity_id 
+			FROM identity_sources 
+			WHERE source_system = $1 AND source_user_id = $2`,
+			system, userID,
+		).Scan(&id)
 		if err != nil {
-			log.Fatalf("resolve identity %s %s: %v", system, userID, err)
+			// For mock data, log and skip if identity cannot be resolved
+			log.Printf("warning: resolve identity %s %s: %v (skipping relationship)", system, userID, err)
+			return 0
 		}
 		return id
 	}
@@ -149,6 +170,9 @@ func main() {
 	// 3. Upsert relationship tables
 	for _, ig := range ds.IdentityGroup {
 		identityID := getIdentityID(ig.SourceSystem, ig.SourceUserID)
+		if identityID == 0 {
+			continue
+		}
 		gid := groupID[ig.SourceSystem+"|"+ig.SourceGroupID]
 		_, err := pool.Exec(ctx, `
 			INSERT INTO identity_group (identity_id, group_id, source_system, source_id, synced_at, created_at)
@@ -162,6 +186,9 @@ func main() {
 	}
 	for _, ir := range ds.IdentityRole {
 		identityID := getIdentityID(ir.SourceSystem, ir.SourceUserID)
+		if identityID == 0 {
+			continue
+		}
 		rid := roleID[ir.SourceSystem+"|"+ir.SourceRoleID]
 		_, err := pool.Exec(ctx, `
 			INSERT INTO identity_role (identity_id, role_id, source_system, source_id, synced_at, created_at)
@@ -200,6 +227,51 @@ func main() {
 		}
 	}
 	log.Println("relationship tables upserted")
+
+	// 4. Seed deadend risk_flags (SailPoint and cross-system) with explanations
+	getIdentityIDByEmail := func(email string) int64 {
+		var id int64
+		if err := pool.QueryRow(ctx, `SELECT id FROM identities WHERE email = $1`, email).Scan(&id); err != nil {
+			return 0
+		}
+		return id
+	}
+	deadends := []struct {
+		email    string
+		ruleKey  string
+		severity string
+		message  string
+		meta     string
+	}{
+		{"bob@example.com", "deadend_orphaned_user", "critical",
+			"Disabled in main IdP (Entra) but still has active access in SailPoint and Okta — orphaned user. Remove access in SailPoint/Okta or re-enable in Entra.",
+			`{"source_systems":["entra_mock","okta_mock"],"reason":"disabled_in_main_idp_active_elsewhere"}`},
+		{"david@example.com", "deadend_orphaned_group", "high",
+			"Member of group with no owner in SailPoint — orphaned group deadend. Assign a group owner or remove membership.",
+			`{"source_system":"okta_mock","group":"Finance-Managers","reason":"group_has_no_owner"}`},
+		{"frank@example.com", "deadend_stale_role", "medium",
+			"Has SailPoint role not updated in 90+ days — stale role. Review and update or remove the role assignment.",
+			`{"source_system":"aws_mock","reason":"role_not_updated_90_days"}`},
+		{"eve@example.com", "deadend_disconnected_permission", "medium",
+			"Has permission in SailPoint with no active path from any system — disconnected permission. Revoke or reassign.",
+			`{"source_system":"entra_mock","reason":"permission_unreachable_from_active_identity"}`},
+	}
+	for _, d := range deadends {
+		identityID := getIdentityIDByEmail(d.email)
+		if identityID == 0 {
+			continue
+		}
+		_, err := pool.Exec(ctx, `
+			INSERT INTO risk_flags (identity_id, rule_key, severity, is_deadend, message, metadata, created_at)
+			VALUES ($1, $2, $3, true, $4, $5::jsonb, $6)`,
+			identityID, d.ruleKey, d.severity, d.message, d.meta, now,
+		)
+		if err != nil {
+			log.Printf("warning: insert deadend flag for %s: %v", d.email, err)
+		}
+	}
+	log.Println("deadend risk_flags seeded (SailPoint and cross-system with explanations)")
+
 	fmt.Println("Mock connector run complete.")
 }
 
